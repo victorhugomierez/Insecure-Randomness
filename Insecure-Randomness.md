@@ -506,4 +506,6 @@ The script attempts to guess a password recovery token based on the assumption t
     - Brute-Force Feasibility: An attacker doesn't need to guess billions of combinations. They only need to test timestamps within a narrow window (e.g., 5-10 minutes) around the time they triggered the token generation.
     - Simultaneous Derivation: If multiple tokens are generated nearly at once, their values will be almost identical, allowing an attacker to derive one from another.
 
-    
+
+# Predictable seed in PRNGs 
+
