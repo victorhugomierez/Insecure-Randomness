@@ -280,3 +280,112 @@ TRNGs are the foundation of trust in high-stakes cryptography. However, because 
 
 ![TRNG  and PRNG](assets/img01.svg)
 
+# Weak or Insufficient Entropy – Summary with Examples
+### What Is It?
+Entropy is the unpredictability that makes random values secure. When an application draws randomness from weak or predictable sources, the output space shrinks dramatically — turning a theoretically large key space into something an attacker can brute-force in seconds.
+
+
+| Source | Why It's Weak |
+| :--- | :--- |
+| **Unix timestamp** | Only ~86,400 unique values per day; guessable within seconds of a known event. |
+| **System clock (ms)** | ~86 million values — sounds large, but trivially brute-forceable. |
+| **User ID or IP address** | Sequential or structured, tiny search space. |
+| **Process ID (PID)** | Typically 1–32,768 on Linux. |
+| **Predictable user input** | Keyboard patterns, common words — not random at all. |
+| **rand() seeded with time** | Combines two weak sources into one weak output. |
+
+## Practical Examples
+## Example 1 — Timestamp-seeded encryption key
+
+```python
+import random, time
+
+# BAD — seed is current Unix timestamp (guessable)
+random.seed(int(time.time()))
+key = random.getrandbits(128)
+
+# Attack: attacker knows the token was generated "around" a certain time.
+# They iterate over timestamps ±300 seconds = only 600 attempts needed.
+for ts in range(known_time - 300, known_time + 300):
+    random.seed(ts)
+    candidate = random.getrandbits(128)
+    if candidate == intercepted_key:
+        print(f"Key cracked with seed: {ts}")
+        break
+```
+A 128-bit key looks strong, but with a timestamp seed it has an effective entropy of just ~17 bits (log₂(86400) ≈ 16.4).
+
+## Example 2 — Password reset token from system clock
+
+```python
+import time
+
+# BAD — token is just the current time in milliseconds
+token = str(int(time.time() * 1000))
+# e.g. "1713744823041"
+# Attacker observes when reset was requested → tries ±5 seconds = 10,000 values
+
+# GOOD
+import secrets
+token = secrets.token_urlsafe(32)  # 256 bits of OS entropy
+```
+## Example 3 — Weak session ID in a web app
+
+```php
+// BAD — session ID built from predictable components
+$session_id = md5($_SERVER['REMOTE_ADDR'] . time() . rand());
+// IP is known, time is guessable, rand() is seeded internally from time
+// MD5 hashing doesn't add entropy — it just transforms predictable input
+
+// GOOD
+$session_id = bin2hex(random_bytes(32)); // CSPRNG, 256 bits
+```
+
+## Example 4 — Low-entropy key in JavaScript
+
+```javascript
+// BAD — Math.random() has recoverable internal state
+function generateKey() {
+  return Math.floor(Math.random() * 1000000).toString();
+  // Only 1,000,000 possible values — brute-forceable instantly
+}
+
+// GOOD
+function generateKey() {
+  return crypto.getRandomValues(new Uint8Array(32))  // OS entropy
+               .reduce((hex, b) => hex + b.toString(16).padStart(2, '0'), '');
+}
+```
+
+## How an Attacker Exploits Weak Entropy
+
+```1. Observe a generated value (token, session ID, encrypted message)
+         ↓
+2. Identify the entropy source (timestamp? PID? clock?)
+         ↓
+3. Estimate the seed range (e.g., ±5 minutes around a known event)
+         ↓
+4. Iterate over all candidate seeds (~600 for seconds, ~600,000 for ms)
+         ↓
+5. Reproduce the PRNG output for each candidate
+         ↓
+6. Match against the intercepted value → seed (and all future values) known
+```
+
+- The Fix: Use OS-Level Entropy
+Modern operating systems maintain a high-entropy pool fed by genuinely unpredictable hardware events. Always draw from it:
+
+
+| Lenguaje / Entorno | Método de Generación Segura |
+| :--- | :--- |
+| **Python** | `secrets.token_hex(32)` o `os.urandom(32)` |
+| **JavaScript (Node)** | `crypto.randomBytes(32)` |
+| **JavaScript (Browser)** | `crypto.getRandomValues(new Uint8Array(32))` |
+| **PHP** | `random_bytes(32)` |
+| **Java** | `new SecureRandom()` |
+| **C#** | `RandomNumberGenerator.Create()` |
+
+The key insight: entropy cannot be manufactured by an algorithm. No amount of hashing, XORing, or mathematical transformation can make a predictable seed unpredictable. The only fix is to start with a genuinely high-entropy source from the OS or hardware.
+
+
+
