@@ -278,3 +278,5 @@ PRNG:   Seed value → mathematical formula → predictable sequence → reprodu
 ```
 TRNGs are the foundation of trust in high-stakes cryptography. However, because they are slow and hardware-dependent, most systems use a hybrid approach — a TRNG seeds a CSPRNG, combining true unpredictability with fast, scalable output.
 
+![TRNG  and PRNG](assets/img01.svg)
+
