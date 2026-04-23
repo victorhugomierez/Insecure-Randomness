@@ -1,4 +1,4 @@
-# Insecure Randomness – Summary with Examples
+# Insecure Randomness
 ## What Is It?
 Web applications rely on random values for session tokens, password reset links, CSRF tokens, and cryptographic keys. When these values are predictable or poorly generated, attackers can guess or reproduce them — turning a security mechanism into a vulnerability.
 
@@ -72,7 +72,7 @@ Randomness is only secure if it is unpredictable and has a large enough space th
 
 --- 
 
-## Randomness in Security – Summary with Examples
+## Randomness in Security
 Randomness
 Randomness is the absence of pattern or predictability in data. In secure systems, it ensures that generated values — keys, tokens, nonces — cannot be guessed or reproduced by an attacker.
 
@@ -189,3 +189,92 @@ Authentication Bypass / Data Decryption
 The entire chain collapses if any one element — seed, entropy source, or generator — is weak. Secure randomness requires high entropy at the source, a CSPRNG for generation, and sufficient output length to make guessing infeasible.
 
 --- 
+
+## Types of RNGs
+True Random Number Generator (TRNG)
+TRNGs derive randomness from unpredictable physical phenomena — events that are genuinely impossible to predict or reproduce, making them the gold standard for cryptographic security.
+
+### Source               |           What's Measured
+
+Thermal noise        |     Random electron movement in resistors
+
+Radioactive decay    |      Unpredictable atomic disintegration timing
+
+Atmospheric noise    |      Radio static from electromagnetic interference
+
+Photon behavior      |      Quantum-level light particle behavior
+
+Hardware events      |      CPU timing jitter, disk seek times
+
+---
+
+## How It Works
+ 
+```bash
+Physical Event (e.g., thermal noise)
+        ↓
+Analog signal captured by hardware sensor
+        ↓
+Converted to digital bits
+        ↓
+True random output  →  e.g., cryptographic key
+```
+
+No mathematical formula is involved — the randomness comes directly from nature, so there is no seed, no pattern, no reproducibility.
+
+## Primary Use Cases
+1. Cryptographic Key Generation
+Algorithms like RSA and AES require keys that are absolutely unpredictable. A TRNG ensures no attacker can reproduce the key generation process.
+
+```bash 
+RSA-2048 key pair generation:
+  → Requires ~2048 truly random bits
+  → TRNG feeds raw entropy into key generation algorithm
+  → Even with full knowledge of the system, key cannot be predicted
+  ```
+
+  2. Digital Signatures
+Signing requires a fresh random value (nonce) each time. If this value repeats or is predictable, the private key can be mathematically extracted.
+
+```bash 
+# Real-world consequence of weak nonce in ECDSA signing:
+# Sony PlayStation 3 (2010) used a FIXED nonce for all signatures
+# → Private signing key was fully recovered by attackers
+# → Entire code-signing system broken
+```
+ 3. Certificate Creation (TLS/SSL)
+Certificate authorities use TRNGs when generating the keys embedded in HTTPS certificates, ensuring each certificate's private key is unique and unguessable.
+
+## Advantages vs. Limitations
+
+```
+✅ Genuinely unpredictable — not reproducible even with full system knowledge
+✅ Highest entropy quality available
+✅ No seed dependency
+
+❌ Requires specialised hardware (HSMs, hardware RNG chips)
+❌ Slower generation speed — entropy must be "collected" from physical events
+❌ Not suitable for high-volume, rapid number generation
+❌ More expensive to deploy at scale
+```
+
+## Real-World Hardware Examples
+
+```
+Intel RDRAND instruction  →  built-in CPU hardware RNG using thermal noise
+/dev/random (Linux)       →  collects entropy from hardware events (keystrokes, 
+                              interrupts, disk I/O)
+HSM (Hardware Security    →  dedicated device for key generation in banks,
+Module)                       certificate authorities, and governments
+Cloudflare's lava lamps   →  cameras filming 100 lava lamps feed visual entropy 
+                              into their RNG system
+```
+
+## TRNG vs. PRNG at a Glance
+
+```
+TRNG:   Physical world → unpredictable bits → no seed → not reproducible
+PRNG:   Seed value → mathematical formula → predictable sequence → reproducible
+```
+TRNGs are the foundation of trust in high-stakes cryptography. However, because they are slow and hardware-dependent, most systems use a hybrid approach — a TRNG seeds a CSPRNG, combining true unpredictability with fast, scalable output.
+
